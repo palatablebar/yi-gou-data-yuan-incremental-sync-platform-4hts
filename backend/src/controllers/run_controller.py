@@ -30,6 +30,16 @@ def get_run(run_id: str, db: Session = Depends(get_db), user: User = Depends(get
     return run_service.run_detail(db, run_id)
 
 
+def list_run_records(
+    run_id: str,
+    status: str | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    return run_service.list_run_records(db, run_id, status=status, limit=limit)
+
+
 def cancel_run(
     run_id: str,
     request: Request,

@@ -36,6 +36,17 @@ def get_run(run_id: str, db: Session = Depends(get_db), user=Depends(get_current
     return run_controller.get_run(run_id, db, user)
 
 
+@router.get("/{run_id}/records")
+def list_run_records(
+    run_id: str,
+    status: str | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+) -> dict:
+    return run_controller.list_run_records(run_id, status, limit, db, user)
+
+
 @router.post("/{run_id}/cancel")
 def cancel(run_id: str, request: Request, db: Session = Depends(get_db), user=Depends(require_permission("runs:trigger"))) -> dict:
     return run_controller.cancel_run(run_id, request, db, user)

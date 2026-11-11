@@ -50,3 +50,41 @@ def max_watermark(values: list[Any], current: Any = None) -> Any:
         if should_advance(value, best):
             best = value
     return best
+
+
+def safe_checkpoint(current: Any, values: list[Any], pending_values: list[Any]) -> Any:
+    """计算可安全推进到的水位线：绝不能越过任何待处理记录。
+
+    - 有 pending：只推进到 pending 最小水位线之前最大的已完成水位线；
+      若找不到（pending 就是最早一条），保持当前水位线。
+    - 无 pending：推进到本批源记录的最大水位线。
+    - pending 缺少水位线值：无法排序，保持当前水位线不动。
+    """
+    pending = list(pending_values or [])
+    if any(coerce(value) is None for value in pending):
+        return current
+
+    if pending:
+        pending_min = pending[0]
+        for value in pending[1:]:
+            if compare(value, pending_min) < 0:
+                pending_min = value
+        completed_below = [
+            value
+            for value in values
+            if coerce(value) is not None and compare(value, pending_min) < 0
+        ]
+        best = max_watermark(completed_below, None)
+        if best is not None:
+            return best
+        if current is not None and compare(current, pending_min) < 0:
+            return current
+        # 逻辑上前进到了 pending 之后（例如历史脏数据），回退到起点重新扫描更安全。
+        return None
+
+    best = max_watermark([value for value in values if coerce(value) is not None], None)
+    if best is None:
+        return current
+    if current is not None and compare(best, current) < 0:
+        return current
+    return best

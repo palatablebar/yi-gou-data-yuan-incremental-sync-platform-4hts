@@ -64,19 +64,27 @@ def _dedupe(
     records: list[dict[str, Any]],
     key_columns: list[str],
     strategy: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """同批次内重复键处理：overwrite 保留最后一条；skip / reject 保留第一条并产出冲突。"""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """同批次内重复键处理。
+
+    - overwrite：保留最后一条，先前版本记为 skipped（已由后一条代表）；
+    - skip：保留第一条，后续重复记为 skipped；
+    - reject：保留第一条，后续重复产出 conflict_rejected（pending）。
+    """
     if not key_columns:
-        return records, []
+        return records, [], []
     seen: dict[tuple, int] = {}
     kept: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
-    replace_on_dup = strategy == ConflictStrategy.OVERWRITE.value
+    superseded: list[dict[str, Any]] = []
     for record in records:
         key = tuple(str(record.get(column)) for column in key_columns)
         if key in seen:
-            if replace_on_dup:
+            if strategy == ConflictStrategy.OVERWRITE.value:
+                superseded.append(dict(kept[seen[key]]))
                 kept[seen[key]] = record
+            elif strategy == ConflictStrategy.SKIP.value:
+                superseded.append(record)
             else:
                 conflicts.append(
                     {
@@ -86,12 +94,14 @@ def _dedupe(
                         ),
                         "raw_payload": record.get("__raw_payload__", record),
                         "source_row_index": record.get("__source_row_index__", 0),
+                        "record_key": record.get("__record_key__"),
+                        "watermark_value": record.get("__watermark_value__"),
                     }
                 )
             continue
         seen[key] = len(kept)
         kept.append(record)
-    return kept, conflicts
+    return kept, conflicts, superseded
 
 
 def _existing_keys(
@@ -159,10 +169,32 @@ class LoadOutcome:
         self.written = 0
         self.skipped = 0
         self.rejected: list[dict[str, Any]] = []
+        # 逐条处置：written / skipped / pending（rejected），供运行轨迹与账本落账。
+        self.dispositions: list[dict[str, Any]] = []
 
     @property
     def rejected_count(self) -> int:
         return len(self.rejected)
+
+    def _disposition(
+        self,
+        row: dict[str, Any],
+        status: str,
+        *,
+        reason_code: str | None = None,
+        reason_detail: str = "",
+    ) -> None:
+        self.dispositions.append(
+            {
+                "record_key": row.get("__record_key__") or row.get("record_key"),
+                "status": status,
+                "watermark_value": row.get("__watermark_value__") or row.get("watermark_value"),
+                "raw_payload": row.get("__raw_payload__") or row.get("raw_payload") or {},
+                "source_row_index": row.get("__source_row_index__", row.get("source_row_index", 0)),
+                "reason_code": reason_code,
+                "reason_detail": reason_detail,
+            }
+        )
 
 
 def insert_rows(
@@ -208,16 +240,30 @@ def insert_rows(
             row["_sync_run_id"] = run_id
         if "_synced_at" in table.c:
             row["_synced_at"] = synced_at
-        # 原始载荷与行号只用于拒绝记录，不写进目标表
+        # 原始载荷、行号、记录指纹只用于拒绝记录与逐条轨迹，不写进目标表
         if "__raw_payload__" in record:
             row["__raw_payload__"] = record["__raw_payload__"]
         if "__source_row_index__" in record:
             row["__source_row_index__"] = record["__source_row_index__"]
+        if "__record_key__" in record:
+            row["__record_key__"] = record["__record_key__"]
+        if "__watermark_value__" in record:
+            row["__watermark_value__"] = record["__watermark_value__"]
         stamped.append(row)
 
     # 1) 批次内重复键
-    kept, batch_conflicts = _dedupe(stamped, key_columns, strategy)
+    kept, batch_conflicts, superseded = _dedupe(stamped, key_columns, strategy)
     outcome.rejected.extend(batch_conflicts)
+    for conflict in batch_conflicts:
+        outcome._disposition(
+            conflict,
+            "pending",
+            reason_code=conflict.get("reason_code"),
+            reason_detail=conflict.get("reason_detail", ""),
+        )
+    for row in superseded:
+        outcome.skipped += 1
+        outcome._disposition(row, "skipped")
     if not kept:
         return outcome
 
@@ -235,24 +281,35 @@ def insert_rows(
             if strategy == ConflictStrategy.REJECT.value:
                 for row in conflicted:
                     key = tuple(str(row.get(column)) for column in key_columns)
-                    outcome.rejected.append(
-                        {
-                            "reason_code": "conflict_rejected",
-                            "reason_detail": (
-                                f"conflict_key={'+'.join(key_columns)} value={key} "
-                                f"strategy=reject target={schema}.{table_name}"
-                            ),
-                            "raw_payload": row.get("__raw_payload__", row),
-                            "source_row_index": row.get("__source_row_index__", 0),
-                        }
+                    rejection = {
+                        "reason_code": "conflict_rejected",
+                        "reason_detail": (
+                            f"conflict_key={'+'.join(key_columns)} value={key} "
+                            f"strategy=reject target={schema}.{table_name}"
+                        ),
+                        "raw_payload": row.get("__raw_payload__", row),
+                        "source_row_index": row.get("__source_row_index__", 0),
+                        "record_key": row.get("__record_key__"),
+                    }
+                    outcome.rejected.append(rejection)
+                    outcome._disposition(
+                        rejection,
+                        "pending",
+                        reason_code=rejection["reason_code"],
+                        reason_detail=rejection["reason_detail"],
                     )
                 kept = survivors
             elif strategy == ConflictStrategy.SKIP.value:
-                outcome.skipped = len(conflicted)
+                outcome.skipped += len(conflicted)
+                for row in conflicted:
+                    outcome._disposition(row, "skipped")
                 kept = survivors
 
     if not kept:
         return outcome
+
+    for row in kept:
+        outcome._disposition(row, "written")
 
     clean_rows = [
         {key: value for key, value in row.items() if not key.startswith("__")} for row in kept

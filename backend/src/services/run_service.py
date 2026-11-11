@@ -13,10 +13,11 @@ from src.models.data_source import DataSource
 from src.models.pipeline_lock import PipelineLock
 from src.models.rejected_record import RejectedRecord
 from src.models.sync_pipeline import SyncPipeline
+from src.models.sync_record import SyncRecord, SyncRecordOutcome
 from src.models.sync_run import SyncRun
 from src.schemas.rejected import serialize_rejected
-from src.schemas.run import serialize_run
-from src.services import mapping_service, quota_service
+from src.schemas.run import serialize_record_outcome, serialize_run
+from src.services import mapping_service, quota_service, record_ledger_service
 from src.utils.errors import AppError, not_found
 from src.utils.logger import get_logger
 
@@ -157,12 +158,59 @@ def run_detail(db: Session, run_id: Any) -> dict[str, Any]:
         "watermark_column": pipeline.watermark_column,
         "conflict_strategy": pipeline.conflict_strategy,
         "conflict_key": pipeline.conflict_key,
+        "last_watermark": pipeline.last_watermark,
     } if pipeline else None
     payload["mappings"] = mapping_service.mapping_dicts(db, run.pipeline_id)
     payload["rejected"] = [serialize_rejected(record) for record in rejected]
     payload["rejected_by_reason"] = _group_reasons(rejected)
     payload["diff"] = _build_diff(db, run, pipeline, source, extract_service)
+    outcomes = (
+        db.query(SyncRecordOutcome)
+        .filter(SyncRecordOutcome.run_id == run.id)
+        .order_by(SyncRecordOutcome.source_row_index.asc(), SyncRecordOutcome.created_at.asc())
+        .all()
+    )
+    payload["record_summary"] = record_ledger_service.outcome_summary(db, run.id)
+    payload["records"] = [serialize_record_outcome(item) for item in outcomes]
+    payload["record_dispositions"] = payload["records"]
+    payload["disposition_summary"] = payload["record_summary"]
+    payload["pending_total"] = (
+        db.query(SyncRecord)
+        .filter(
+            SyncRecord.pipeline_id == run.pipeline_id,
+            SyncRecord.status == "pending",
+        )
+        .count()
+        if pipeline
+        else 0
+    )
     return payload
+
+
+def list_run_records(
+    db: Session,
+    run_id: Any,
+    *,
+    status: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    run = get_run(db, run_id)
+    query = db.query(SyncRecordOutcome).filter(SyncRecordOutcome.run_id == run.id)
+    if status:
+        query = query.filter(SyncRecordOutcome.status == status)
+    total = query.count()
+    rows = (
+        query.order_by(
+            SyncRecordOutcome.source_row_index.asc(), SyncRecordOutcome.created_at.asc()
+        )
+        .limit(min(limit, 500))
+        .all()
+    )
+    return {
+        "items": [serialize_record_outcome(item) for item in rows],
+        "total": total,
+        "summary": record_ledger_service.outcome_summary(db, run.id),
+    }
 
 
 def _group_reasons(rejected: list[RejectedRecord]) -> dict[str, int]:

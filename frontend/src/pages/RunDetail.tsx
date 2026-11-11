@@ -116,6 +116,19 @@ export const RunDetailPage = () => {
             {run.rows_rejected}
           </span>{' '}
           · 跳过 <span className="num">{run.rows_skipped}</span>
+          {run.record_summary && (
+            <>
+              {' '}· 逐条{' '}
+              <span className="num" style={{ color: 'var(--color-ok)' }}>{run.record_summary.written}</span>
+              /{' '}
+              <span className="num">{run.record_summary.skipped}</span>
+              /{' '}
+              <span className="num" style={{ color: run.record_summary.pending ? 'var(--color-warn)' : 'var(--color-dim)' }}>
+                {run.record_summary.pending}
+              </span>
+              <span className="ml-1 text-dim">(写/跳/待)</span>
+            </>
+          )}
         </div>
         <div className="ml-auto px-3 py-2 text-micro text-dim">
           {isNoNewData(run) ? '本批无新数据' : watermarkLine(run.watermark_from, run.watermark_value)}
@@ -216,6 +229,42 @@ export const RunDetailPage = () => {
                   <div className="num mt-0.5 truncate text-micro text-dim">{JSON.stringify(record.raw_payload)}</div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {(run.records?.length ?? 0) > 0 && (
+            <div className="mt-3 border-t pt-2" style={{ borderColor: 'var(--color-wire)' }}>
+              <div className="label-caps mb-1">逐条去向 · 写 / 跳 / 待</div>
+              <div className="max-h-[220px] overflow-y-auto">
+                {run.records!.slice(0, 100).map((record) => (
+                  <div key={record.id} className="hairline flex items-baseline gap-2 py-1">
+                    <span className="num text-micro text-dim">#{record.source_row_index}</span>
+                    <span
+                      className="border px-1 text-micro"
+                      style={{
+                        borderColor:
+                          record.status === 'pending'
+                            ? 'var(--color-warn)'
+                            : record.status === 'written'
+                              ? 'var(--color-ok)'
+                              : 'var(--color-wire)',
+                        color:
+                          record.status === 'pending'
+                            ? 'var(--color-warn)'
+                            : record.status === 'written'
+                              ? 'var(--color-ok)'
+                              : 'var(--color-dim)',
+                      }}
+                    >
+                      {record.status_label}
+                    </span>
+                    <span className="num text-micro text-dim">{record.watermark_value ?? '—'}</span>
+                    <span className="num flex-1 truncate text-micro text-dim">
+                      {record.reason_detail || record.record_key}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </section>

@@ -17,6 +17,7 @@ def verify_run(
     written: int,
     skipped: int,
     rejected: list[dict[str, Any]],
+    transform_failed_rows: int = 0,
 ) -> dict[str, Any]:
     totals = verify_service.verify_totals(rows_read, written, skipped, len(rejected))
     codes: dict[str, int] = {}
@@ -24,8 +25,11 @@ def verify_run(
         key = item.get("reason_code") or REASON_TRANSFORM_FAILED
         codes[key] = codes.get(key, 0) + 1
     conflict_rejects = codes.get(REASON_CONFLICT_REJECTED, 0)
+    # 拒绝项既包含 transform 失败，也包含写入层拒绝；staging 只承载成功转换的行。
+    load_rejected = max(len(rejected) - transform_failed_rows, 0)
+    staging_ok = staging_rows == written + skipped + load_rejected
     return {
-        "ok": totals["ok"] and staging_rows == written + len(rejected),
+        "ok": totals["ok"] and staging_ok,
         "totals": totals,
         "rejected_codes": codes,
         "conflict_rejects": conflict_rejects,
@@ -33,6 +37,7 @@ def verify_run(
         "written": written,
         "skipped": skipped,
         "rejected": len(rejected),
+        "staging_ok": staging_ok,
     }
 
 

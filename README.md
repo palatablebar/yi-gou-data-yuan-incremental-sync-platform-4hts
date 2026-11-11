@@ -10,6 +10,8 @@
 - **探测**：CSV 探出分隔符/编码/字段清单；PG 表探出列与行数；Mock REST 返回第 1 页样本并提示「共 N 页」；结果写入 `DataSource.status` 与 `last_probed_at`。
 - **映射与七种转换**：`trim` / `upper` / `lower` / `date_format` / `number_cast` / `concat` / `default`，每条映射可选必填、默认值、排序。
 - **全量 / 增量**：增量按管道自己的 `watermark_column` 真实比较并推进水位线，重跑一次即「本批无新数据」。
+- **逐条记录账本**：每条源记录按内容指纹登记 `written / skipped / pending`；水位线相同但内容变化的迟到补传、以及已同步业务键（冲突键）的回滚更新都会被重新接入，重跑不会重复计数；存在 pending 时断点只推进到它之前，部分失败后重跑会继续处理未完成记录而不是整批跳到最新。
+- **批次处置轨迹**：每次运行的逐条去向写入 `meta.sync_record_outcomes`，`/runs/:id` 返回 `records` 与 `record_summary`，可追溯每条记录最终写入了、被跳过还是仍待处理。
 - **三种冲突策略**：`skip`（ON CONFLICT DO NOTHING）/ `overwrite`（DO UPDATE）/ `reject`（预查已存在键 + 批次内重复键，拒绝而不覆盖）。
 - **部分成功语义**：有拒绝行时 `status=partial`，`error_message` 为空但 `rows_rejected > 0`。
 - **拒绝行与重放**：被拒行带原始载荷与原因码进入 `RejectedRecord`，修完映射后可单条/批量重放，写成功即从拒绝列表消失。
@@ -148,8 +150,8 @@ gb-544/
 │   └── src/
 │       ├── routes/              # auth/source/pipeline/run/rejected/target/api_key/audit/health/meta/mock
 │       ├── controllers/         # 每个路由一个 controller
-│       ├── services/            # auth/source/pipeline/mapping/run/extract/transform/load/verify/quota/scheduler/api_key/audit
-│       ├── models/              # user/data_source/sync_pipeline/field_mapping/sync_run/rejected_record/api_key/audit_log/pipeline_lock
+│       ├── services/            # auth/source/pipeline/mapping/run/extract/transform/load/verify/quota/scheduler/api_key/audit/record_ledger
+│       ├── models/              # user/data_source/sync_pipeline/field_mapping/sync_run/sync_record/rejected_record/api_key/audit_log/pipeline_lock
 │       ├── schemas/             # auth/source/pipeline/mapping/run/rejected/target/common
 │       ├── middlewares/         # auth/rbac/api_key/audit_logger/rate_limit/error_handler
 │       ├── utils/               # jwt/password/logger/formatters/watermark/backoff/checksum/csv_reader/jsonl_reader/mock_rest/errors/redis_client

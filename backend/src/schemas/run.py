@@ -56,3 +56,23 @@ def serialize_run(run: Any, *, pipeline_name: str | None = None, source_type: st
         "created_at": _iso(run.created_at),
         "duration_text": fmt_duration(run.started_at, run.finished_at),
     }
+
+
+def serialize_record_outcome(outcome: Any) -> dict[str, Any]:
+    from src.constants.enums import ENUM_LABELS
+
+    status = outcome.status
+    return {
+        "id": str(outcome.id),
+        "run_id": str(outcome.run_id),
+        "pipeline_id": str(outcome.pipeline_id),
+        "record_key": outcome.record_key,
+        "status": status,
+        "status_label": ENUM_LABELS.get("RecordStatus", {}).get(status, status),
+        "watermark_value": outcome.watermark_value,
+        "source_row_index": outcome.source_row_index,
+        "raw_payload": outcome.raw_payload_json or {},
+        "reason_code": outcome.reason_code,
+        "reason_detail": outcome.reason_detail,
+        "created_at": _iso(outcome.created_at),
+    }

@@ -84,6 +84,18 @@ class ReasonCode(str, Enum):
     CONSTRAINT_VIOLATION = "constraint_violation"
 
 
+class RecordStatus(str, Enum):
+    """逐条记录的最终处置口径：写入 / 跳过 / 仍待处理。"""
+
+    WRITTEN = "written"
+    SKIPPED = "skipped"
+    PENDING = "pending"
+
+    @classmethod
+    def final(cls) -> set[str]:
+        return {cls.WRITTEN.value, cls.SKIPPED.value}
+
+
 class TargetSchema(str, Enum):
     STAGING = "staging"
     TARGET = "target"
@@ -131,5 +143,10 @@ ENUM_LABELS: dict[str, dict[str, str]] = {
         "transform_failed": "转换失败",
         "conflict_rejected": "冲突被拒绝",
         "constraint_violation": "约束冲突",
+    },
+    "RecordStatus": {
+        "written": "已写入",
+        "skipped": "已跳过",
+        "pending": "待处理",
     },
 }

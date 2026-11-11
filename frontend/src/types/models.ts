@@ -14,6 +14,7 @@ export type TransformType =
   | 'default';
 export type PipelineStatus = 'draft' | 'active' | 'paused' | 'error';
 export type Stage = 'probe' | 'extract' | 'transform' | 'load' | 'verify';
+export type RecordStatus = 'written' | 'skipped' | 'pending';
 
 export interface User {
   id: string;
@@ -120,6 +121,21 @@ export interface RejectedRecord {
   created_at: string | null;
 }
 
+export interface RecordOutcome {
+  id: string;
+  run_id: string;
+  pipeline_id: string;
+  record_key: string;
+  status: RecordStatus;
+  status_label: string;
+  watermark_value: string | null;
+  source_row_index: number;
+  raw_payload: Record<string, unknown>;
+  reason_code: string | null;
+  reason_detail: string;
+  created_at: string | null;
+}
+
 export interface RunDetail extends SyncRunBrief {
   pipeline: {
     id: string;
@@ -133,6 +149,9 @@ export interface RunDetail extends SyncRunBrief {
   mappings: FieldMapping[];
   rejected: RejectedRecord[];
   rejected_by_reason: Record<string, number>;
+  records?: RecordOutcome[];
+  record_summary?: { written: number; skipped: number; pending: number; total: number };
+  pending_total?: number;
   diff: {
     source_rows: Record<string, unknown>[];
     target_rows: Record<string, unknown>[];
